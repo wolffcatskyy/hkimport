@@ -50,24 +50,30 @@ struct SampleKeyTests {
     let t0 = Date(timeIntervalSince1970: 1_700_000_000)
 
     @Test func sameInputsMatch() {
-        let a = SampleKey(type: "T", start: t0, end: t0 + 60, value: 72.00001)
-        let b = SampleKey(type: "T", start: t0, end: t0 + 60, value: 72.00002)
+        let a = SampleKey(type: "T", source: "S", start: t0, end: t0 + 60, value: 72.00001)
+        let b = SampleKey(type: "T", source: "S", start: t0, end: t0 + 60, value: 72.00002)
         #expect(a == b)
     }
 
     @Test func differentValueTypeOrDatesDoNotMatch() {
-        let a = SampleKey(type: "T", start: t0, end: t0 + 60, value: 72)
-        #expect(a != SampleKey(type: "T", start: t0, end: t0 + 60, value: 73))
-        #expect(a != SampleKey(type: "U", start: t0, end: t0 + 60, value: 72))
-        #expect(a != SampleKey(type: "T", start: t0 + 1, end: t0 + 60, value: 72))
-        #expect(a != SampleKey(type: "T", start: t0, end: t0 + 61, value: 72))
+        let a = SampleKey(type: "T", source: "S", start: t0, end: t0 + 60, value: 72)
+        #expect(a != SampleKey(type: "T", source: "S", start: t0, end: t0 + 60, value: 73))
+        #expect(a != SampleKey(type: "U", source: "S", start: t0, end: t0 + 60, value: 72))
+        #expect(a != SampleKey(type: "T", source: "S", start: t0 + 1, end: t0 + 60, value: 72))
+        #expect(a != SampleKey(type: "T", source: "S", start: t0, end: t0 + 61, value: 72))
+    }
+
+    @Test func differentSourceDoesNotMatch() {
+        let a = SampleKey(type: "T", source: "Watch", start: t0, end: t0 + 60, value: 72)
+        #expect(a != SampleKey(type: "T", source: "Phone", start: t0, end: t0 + 60, value: 72))
+        #expect(a == SampleKey(type: "T", source: "Watch", start: t0, end: t0 + 60, value: 72))
     }
 
     @Test func nonFiniteValuesNeverMatchFiniteOnes() {
-        let nan = SampleKey(type: "T", start: t0, end: t0, value: .nan)
-        #expect(nan != SampleKey(type: "T", start: t0, end: t0, value: 0))
-        _ = SampleKey(type: "T", start: t0, end: t0, value: .infinity)
-        _ = SampleKey(type: "T", start: t0, end: t0, value: 1e300)
+        let nan = SampleKey(type: "T", source: "S", start: t0, end: t0, value: .nan)
+        #expect(nan != SampleKey(type: "T", source: "S", start: t0, end: t0, value: 0))
+        _ = SampleKey(type: "T", source: "S", start: t0, end: t0, value: .infinity)
+        _ = SampleKey(type: "T", source: "S", start: t0, end: t0, value: 1e300)
     }
 }
 
