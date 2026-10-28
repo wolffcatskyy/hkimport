@@ -33,7 +33,7 @@ class ViewController: UIViewController {
         row.alignment = .center
 
         summaryView.isEditable = false
-        summaryView.font = UIFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        summaryView.font = UIFont(name: "Menlo-Regular", size: 11) ?? UIFont.systemFont(ofSize: 11)
         summaryView.text = "Import results and skipped records will appear here."
         summaryView.heightAnchor.constraint(equalToConstant: 200).isActive = true
 
