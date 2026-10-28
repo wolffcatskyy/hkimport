@@ -1,0 +1,45 @@
+name: validate
+on:
+  push:
+    branches: [ci-validate]
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes
+          xcrun simctl list devices available | head -40
+      - name: Pick simulator
+        run: |
+          UDID=$(xcrun simctl list devices available iPhone | grep -Eo '[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}' | head -1)
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID" || true
+      - name: Build and test
+        run: |
+          mkdir -p build
+          set -o pipefail
+          xcodebuild test -project HKImport.xcodeproj -scheme HKImport \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            -resultBundlePath build/test.xcresult \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild.log | tail -150
+      - name: Launch app and screenshot
+        if: always()
+        run: |
+          APP=$(find ~/Library/Developer/Xcode/DerivedData -name HKImport.app -path '*iphonesimulator*' | head -1)
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" $(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
+          sleep 8
+          xcrun simctl io "$UDID" screenshot build/ui.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results
+          path: |
+            build/ui.png
+            build/xcodebuild.log
+            build/test.xcresult
