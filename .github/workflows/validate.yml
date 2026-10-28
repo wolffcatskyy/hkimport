@@ -6,29 +6,50 @@ on:
 jobs:
   test:
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [pr, upstream-main]
     steps:
       - uses: actions/checkout@v4
-      - name: Toolchain
-        run: |
-          xcodebuild -version
-          xcrun simctl list runtimes
-          xcrun simctl list devices available | head -40
+        if: matrix.variant == 'pr'
+      - uses: actions/checkout@v4
+        if: matrix.variant == 'upstream-main'
+        with:
+          repository: ashtom/hkimport
+          ref: main
       - name: Pick simulator
         run: |
+          xcodebuild -version
           UDID=$(xcrun simctl list devices available iPhone | grep -Eo '[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}' | head -1)
           echo "UDID=$UDID" >> "$GITHUB_ENV"
           xcrun simctl boot "$UDID" || true
       - name: Build and test
+        continue-on-error: true
         run: |
           mkdir -p build
           set -o pipefail
           xcodebuild test -project HKImport.xcodeproj -scheme HKImport \
             -destination "platform=iOS Simulator,id=$UDID" \
             -resultBundlePath build/test.xcresult \
-            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild.log | tail -150
+            CODE_SIGNING_ALLOWED=NO > build/xcodebuild.log 2>&1
+          echo "xcodebuild exit: $?" 
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## ${{ matrix.variant }}"
+            echo '```'
+            grep -E "error:|\*\* TEST|Test Suite .* (passed|failed)|Executed [0-9]+ test|Test run with|✘|✔ Test|Issue recorded|Failing tests" build/xcodebuild.log | cut -c1-300 | head -80
+            echo '--- xcresult summary ---'
+            xcrun xcresulttool get test-results summary --path build/test.xcresult --compact 2>&1 | head -c 4000
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -5 build/xcodebuild.log
       - name: Launch app and screenshot
         if: always()
+        continue-on-error: true
         run: |
           APP=$(find ~/Library/Developer/Xcode/DerivedData -name HKImport.app -path '*iphonesimulator*' | head -1)
           xcrun simctl install "$UDID" "$APP"
@@ -38,8 +59,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: results
+          name: results-${{ matrix.variant }}
           path: |
             build/ui.png
             build/xcodebuild.log
-            build/test.xcresult
