@@ -88,6 +88,9 @@ struct ImportSummary {
     var samplesSaved = 0
     var samplesFailedToSave = 0
     var dryRun = false
+    /// True when the duplicate check ran. HealthKit returns no samples for types whose read
+    /// access was denied, so in that case existing data is invisible to the check.
+    var duplicateCheckRan = false
     /// reason -> HealthKit type identifier -> count
     private(set) var skipped: [SkipReason: [String: Int]] = [:]
 
@@ -112,6 +115,9 @@ struct ImportSummary {
             lines.append("Failed to save: \(samplesFailedToSave)")
         }
         lines.append("Skipped: \(totalSkipped)")
+        if duplicateCheckRan {
+            lines.append("Duplicate check compares type, source, dates and value. It cannot see types where Health read access was denied.")
+        }
         for reason in SkipReason.allCases {
             guard let byType = skipped[reason], !byType.isEmpty else { continue }
             lines.append("  \(reason.rawValue): \(skippedCount(for: reason))")
@@ -127,17 +133,21 @@ struct ImportSummary {
     }
 }
 
-/// Identifies a sample by type, start, end and value so that records in export.xml
-/// can be matched against samples already in Health. Dates are compared to the
-/// millisecond and values to four decimal places.
+/// Identifies a sample by type, source, start, end and value so that records in
+/// export.xml can be matched against samples already in Health. Dates are compared to
+/// the millisecond and values to four decimal places. The source is part of the key so a
+/// record from one device is never dropped because another device recorded the same
+/// numbers at the same time.
 struct SampleKey: Hashable {
     let type: String
+    let source: String
     let startMillis: Int64
     let endMillis: Int64
     let value: Int64
 
-    init(type: String, start: Date, end: Date, value: Double) {
+    init(type: String, source: String, start: Date, end: Date, value: Double) {
         self.type = type
+        self.source = source
         self.startMillis = Int64((start.timeIntervalSince1970 * 1000).rounded())
         self.endMillis = Int64((end.timeIntervalSince1970 * 1000).rounded())
         // Values that are not finite or too large to scale never match anything.
@@ -493,7 +503,7 @@ class Importer: NSObject, XMLParserDelegate {
             } else {
                 keyValue = item.value
             }
-            sampleKeys[hkSample.uuid] = SampleKey(type: item.type, start: item.startDate, end: item.endDate, value: keyValue)
+            sampleKeys[hkSample.uuid] = SampleKey(type: item.type, source: item.sourceName, start: item.startDate, end: item.endDate, value: keyValue)
             successBlock()
         } else {
             summary.skip(hkSample == nil ? .unsupportedType : .notAuthorized, type: item.type)
@@ -503,6 +513,7 @@ class Importer: NSObject, XMLParserDelegate {
 
     func saveAllSamples() {
         summary.dryRun = dryRun
+        summary.duplicateCheckRan = skipExistingSamples && healthStore != nil
         filterExistingSamples(allSamples) { samples in
             guard !self.dryRun else {
                 self.allSamples = samples
@@ -564,9 +575,15 @@ class Importer: NSObject, XMLParserDelegate {
                 if let error = error, Constants.loggingEnabled {
                     os_log("Duplicate check failed for %@: %@", sampleType.identifier, error.localizedDescription)
                 }
-                let existing = Set((results ?? []).map { self.key(for: $0, fallbackUnit: self.unitsByType[sampleType.identifier]) })
+                // Count existing samples per key so that N identical records in the file are only
+                // treated as duplicates of N identical samples already in Health.
+                var existing: [SampleKey: Int] = [:]
+                for result in results ?? [] {
+                    existing[self.key(for: result, fallbackUnit: self.unitsByType[sampleType.identifier]), default: 0] += 1
+                }
                 for sample in pending {
-                    if let key = self.sampleKeys[sample.uuid], existing.contains(key) {
+                    if let key = self.sampleKeys[sample.uuid], let remaining = existing[key], remaining > 0 {
+                        existing[key] = remaining - 1
                         duplicateUUIDs.insert(sample.uuid)
                     }
                 }
@@ -592,7 +609,9 @@ class Importer: NSObject, XMLParserDelegate {
         } else {
             value = .nan
         }
-        return SampleKey(type: sample.sampleType.identifier, start: sample.startDate, end: sample.endDate, value: value)
+        // Samples written by this importer carry the original source name in metadata.
+        let source = (sample.metadata?["HKImportOriginalSourceName"] as? String) ?? sample.sourceRevision.source.name
+        return SampleKey(type: sample.sampleType.identifier, source: source, start: sample.startDate, end: sample.endDate, value: value)
     }
 
     static func makeUnit(_ string: String) -> HKUnit? {
