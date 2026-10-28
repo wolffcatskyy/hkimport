@@ -544,7 +544,7 @@ class Importer: NSObject, XMLParserDelegate {
     /// This relies on read access: if read access to a type was denied, HealthKit returns no
     /// samples for it and nothing can be detected as a duplicate.
     func filterExistingSamples(_ samples: [HKSample], completion: @escaping ([HKSample]) -> Void) {
-        guard skipExistingSamples, let healthStore = healthStore, !samples.isEmpty else {
+        guard skipExistingSamples, healthStore != nil, !samples.isEmpty else {
             completion(samples)
             return
         }
@@ -570,28 +570,40 @@ class Importer: NSObject, XMLParserDelegate {
                 next()
                 return
             }
-            let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
-            let query = HKSampleQuery(sampleType: sampleType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, results, error in
-                if let error = error, Constants.loggingEnabled {
-                    os_log("Duplicate check failed for %@: %@", sampleType.identifier, error.localizedDescription)
-                }
+            self.fetchExistingSamples(of: sampleType, start: start, end: end) { results in
                 // Count existing samples per key so that N identical records in the file are only
                 // treated as duplicates of N identical samples already in Health.
                 var existing: [SampleKey: Int] = [:]
-                for result in results ?? [] {
+                for result in results {
                     existing[self.key(for: result, fallbackUnit: self.unitsByType[sampleType.identifier]), default: 0] += 1
                 }
                 for sample in pending {
-                    if let key = self.sampleKeys[sample.uuid], let remaining = existing[key], remaining > 0 {
-                        existing[key] = remaining - 1
+                    if let key = self.sampleKeys[sample.uuid], let count = existing[key], count > 0 {
+                        existing[key] = count - 1
                         duplicateUUIDs.insert(sample.uuid)
                     }
                 }
                 next()
             }
-            healthStore.execute(query)
         }
         next()
+    }
+
+    /// Returns the samples of one type that overlap the given dates and are already in Health.
+    /// Separate from the matching logic so tests can supply a fake list of existing samples.
+    func fetchExistingSamples(of sampleType: HKSampleType, start: Date, end: Date, completion: @escaping ([HKSample]) -> Void) {
+        guard let healthStore = healthStore else {
+            completion([])
+            return
+        }
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [])
+        let query = HKSampleQuery(sampleType: sampleType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, results, error in
+            if let error = error, Constants.loggingEnabled {
+                os_log("Duplicate check failed for %@: %@", sampleType.identifier, error.localizedDescription)
+            }
+            completion(results ?? [])
+        }
+        healthStore.execute(query)
     }
 
     private func key(for sample: HKSample, fallbackUnit: HKUnit?) -> SampleKey {
